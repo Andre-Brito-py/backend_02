@@ -56,3 +56,32 @@ npm run dev
 ## Observações
 - O seed cria `AdminTeste / admin@123`. Mude a senha após deploy.
 - Antes de entregar, rode `npm run reset:db` para zerar vendas e remover caixas (mantendo apenas ADMIN).
+## Banco de Dados (Neon Postgres)
+
+Este projeto já está pronto para usar Postgres no Neon.
+
+1. Crie um projeto em https://neon.tech e copie a Connection String.
+   - Exemplo: postgresql://usuario:senha@ep-xxxx.aws.neon.tech/seubanco?sslmode=require
+2. No Render, adicione a variável DATABASE_URL com essa Connection String.
+3. Na primeira implantação, o serviço executa prisma db push para criar as tabelas.
+4. Opcional: rode 
+pm run seed para popular dados básicos (se aplicável) ou 
+pm run reset:db para limpar vendas e usuários não-admin.
+
+### Desenvolvimento local
+- Crie um arquivo .env no backend com:
+`
+DATABASE_URL=postgresql://usuario:senha@ep-xxxx.aws.neon.tech/seubanco?sslmode=require
+JWT_SECRET=troque-este-segredo
+CORS_ORIGINS=http://localhost:3000
+`
+- Execute 
+pm install, 
+px prisma generate, 
+px prisma db push, depois 
+pm start.
+
+### Observações
+- sslmode=require é necessário com Neon.
+- Ajuste CORS_ORIGINS para o domínio do seu frontend no Vercel.
+- Garanta que NEXT_PUBLIC_API_URL no frontend aponte para a URL do backend no Render.
