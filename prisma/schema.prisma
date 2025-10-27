@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -25,7 +25,9 @@ model Product {
   category  String?
   stock     Int         @default(0)
   variablePrice Boolean @default(false)
+  suspended Boolean     @default(false)
   saleItems SaleItem[]
+  additionalCategories ProductAdditionalCategory[]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 }
@@ -60,4 +62,48 @@ model SaleItem {
   product    Product @relation(fields: [productId], references: [id])
   quantity   Int
   unitPrice  Decimal
+  isDelivery Boolean @default(false)
+  additionals SaleItemAdditional[]
+}
+
+model AdditionalCategory {
+  id          Int         @id @default(autoincrement())
+  name        String      @unique
+  description String?
+  additionals Additional[]
+  products    ProductAdditionalCategory[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+model Additional {
+  id                 Int                    @id @default(autoincrement())
+  name               String
+  price              Decimal
+  categoryId         Int
+  category           AdditionalCategory     @relation(fields: [categoryId], references: [id])
+  suspended          Boolean                @default(false)
+  saleItemAdditionals SaleItemAdditional[]
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+}
+
+model ProductAdditionalCategory {
+  id                    Int                @id @default(autoincrement())
+  productId             Int
+  product               Product            @relation(fields: [productId], references: [id])
+  additionalCategoryId  Int
+  additionalCategory    AdditionalCategory @relation(fields: [additionalCategoryId], references: [id])
+  
+  @@unique([productId, additionalCategoryId])
+}
+
+model SaleItemAdditional {
+  id           Int        @id @default(autoincrement())
+  saleItemId   Int
+  saleItem     SaleItem   @relation(fields: [saleItemId], references: [id])
+  additionalId Int
+  additional   Additional @relation(fields: [additionalId], references: [id])
+  quantity     Int        @default(1)
+  unitPrice    Decimal
 }

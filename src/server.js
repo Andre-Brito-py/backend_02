@@ -10,8 +10,10 @@ import paymentRoutes from './routes/payments.js';
 import saleRoutes from './routes/sales.js';
 import reportRoutes from './routes/reports.js';
 import categoryRoutes from './routes/categories.js';
+import additionalCategoryRoutes from './routes/additionalCategories.js';
+import additionalRoutes from './routes/additionals.js';
 
-dotenv.config();
+dotenv.config({ override: true });
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -21,12 +23,17 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '*')
   .split(',')
   .map(o => o.trim())
   .filter(Boolean);
+const devWhitelist = ['http://localhost:3000', 'http://localhost:3001'];
 
 app.use(cors({
   origin: function (origin, callback) {
     // Permite ferramentas locais sem origin
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+    if (
+      allowedOrigins.includes('*') ||
+      allowedOrigins.includes(origin) ||
+      (process.env.NODE_ENV !== 'production' && devWhitelist.includes(origin))
+    ) {
       return callback(null, true);
     }
     return callback(new Error('Not allowed by CORS: ' + origin), false);
@@ -48,6 +55,8 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/sales', saleRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/categories', categoryRoutes);
+app.use('/api/additional-categories', additionalCategoryRoutes);
+app.use('/api/additionals', additionalRoutes);
 
 // Tratamento de erros genérico
 app.use((err, req, res, next) => {

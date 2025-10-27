@@ -47,18 +47,21 @@ router.get('/summary', async (req, res) => {
 
 router.get('/revenue-by-day', async (req, res) => {
   try {
-    const { start, end } = req.query;
+    const { start, end, delivery } = req.query;
     const where = {};
     if (start || end) {
       where.createdAt = {};
       if (start) where.createdAt.gte = new Date(start);
       if (end) where.createdAt.lte = new Date(end);
     }
-    const sales = await prisma.sale.findMany({ where, orderBy: { createdAt: 'asc' } });
+    // Carrega vendas com itens e aplica filtro de delivery/presencial nos itens
+    const sales = await prisma.sale.findMany({ where, orderBy: { createdAt: 'asc' }, include: { items: true } });
+    const matchDelivery = (i) => delivery === 'delivery' ? i.isDelivery === true : delivery === 'presencial' ? i.isDelivery === false : true;
     const map = new Map();
     for (const s of sales) {
       const d = s.createdAt.toISOString().slice(0,10);
-      map.set(d, (map.get(d) || 0) + Number(s.total));
+      const totalItems = s.items.filter(matchDelivery).reduce((acc, it) => acc + Number(it.unitPrice) * it.quantity, 0);
+      map.set(d, (map.get(d) || 0) + totalItems);
     }
     const data = Array.from(map.entries()).map(([date, total]) => ({ date, total }));
     res.json(data);
@@ -105,7 +108,7 @@ router.get('/top-products', async (req, res) => {
 
 router.get('/export-xlsx', async (req, res) => {
   try {
-    const { start, end, paymentMethodId, productId } = req.query;
+    const { start, end, paymentMethodId, productId, delivery } = req.query;
     const where = {};
     if (start || end) {
       where.createdAt = {};
@@ -131,15 +134,20 @@ router.get('/export-xlsx', async (req, res) => {
       );
     }
 
-    // Faturamento por dia
+    // Filtrar itens por delivery/presencial
+    const matchDelivery = (i) => delivery === 'delivery' ? i.isDelivery === true : delivery === 'presencial' ? i.isDelivery === false : true;
+    sales = sales.map(s => ({ ...s, items: s.items.filter(matchDelivery) })).filter(s => s.items.length > 0);
+
+    // Faturamento por dia (somando subtotais dos itens filtrados)
     const mapByDay = new Map();
     for (const s of sales) {
       const d = s.createdAt.toISOString().slice(0,10);
-      mapByDay.set(d, (mapByDay.get(d) || 0) + Number(s.total));
+      const totalItemsDay = s.items.reduce((acc, i) => acc + Number(i.unitPrice) * i.quantity, 0);
+      mapByDay.set(d, (mapByDay.get(d) || 0) + totalItemsDay);
     }
     const revenueByDay = Array.from(mapByDay.entries()).map(([date, total]) => ({ date, total }));
 
-    // Top produtos
+    // Top produtos (apenas itens filtrados)
     const mapTop = new Map();
     for (const s of sales) {
       for (const i of s.items) {
@@ -152,8 +160,8 @@ router.get('/export-xlsx', async (req, res) => {
     }
     const topProducts = Array.from(mapTop.values()).sort((a,b) => b.qty - a.qty);
 
-    // Resumo período
-    const total = sales.reduce((acc, s) => acc + Number(s.total), 0);
+    // Resumo período (com base em itens filtrados)
+    const total = sales.reduce((acc, s) => acc + s.items.reduce((a,i)=>a + Number(i.unitPrice) * i.quantity, 0), 0);
     const count = sales.length;
     const totalItems = sales.reduce((acc, s) => acc + s.items.reduce((a,i)=>a+i.quantity,0), 0);
     const avgTicket = count ? total / count : 0;
@@ -174,6 +182,7 @@ router.get('/export-xlsx', async (req, res) => {
     wsResumo.autoFilter = { from: 'A1', to: 'B1' };
     wsResumo.addRow({ k: 'Início', v: start ? new Date(start) : '-' });
     wsResumo.addRow({ k: 'Fim', v: end ? new Date(end) : '-' });
+    wsResumo.addRow({ k: 'Tipo', v: delivery === 'delivery' ? 'Delivery' : delivery === 'presencial' ? 'Presencial' : 'Todos' });
     wsResumo.addRow({ k: 'Total de vendas', v: count });
     wsResumo.addRow({ k: 'Itens vendidos (qtde)', v: totalItems });
     wsResumo.addRow({ k: 'Faturamento total (R$)', v: total });
@@ -221,6 +230,7 @@ router.get('/export-xlsx', async (req, res) => {
     wsVendas.views = [{ state: 'frozen', ySplit: 1 }];
     wsVendas.autoFilter = { from: 'A1', to: 'G1' };
     for (const s of sales) {
+      const totalItems = s.items.reduce((acc, i) => acc + Number(i.unitPrice) * i.quantity, 0);
       wsVendas.addRow({
         saleId: s.id,
         dt: new Date(s.createdAt),
@@ -228,7 +238,7 @@ router.get('/export-xlsx', async (req, res) => {
         pay: s.paymentMethod?.name || s.paymentMethodId,
         items: s.items.map(i => `${i.product.name} x${i.quantity} (R$ ${Number(i.unitPrice).toFixed(2)})`).join('; '),
         qtyTotal: s.items.reduce((a,i)=>a+i.quantity,0),
-        tot: Number(s.total),
+        tot: Number(totalItems),
       });
     }
 
@@ -244,6 +254,7 @@ router.get('/export-xlsx', async (req, res) => {
       { header: 'Quantidade', key: 'qty', width: 14 },
       { header: 'Unitário (R$)', key: 'unit', width: 18, style: { numFmt: '#,##0.00' } },
       { header: 'Subtotal (R$)', key: 'sub', width: 18, style: { numFmt: '#,##0.00' } },
+      { header: 'Tipo', key: 'tipo', width: 14 },
     ];
     wsItens.getRow(1).font = { bold: true };
     wsItens.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEAF2FF' } };
@@ -263,6 +274,7 @@ router.get('/export-xlsx', async (req, res) => {
           qty: i.quantity,
           unit,
           sub,
+          tipo: i.isDelivery ? 'Delivery' : 'Presencial',
         });
       }
     }

@@ -54,7 +54,12 @@ router.post('/login', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'Credenciais inválidas' });
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Credenciais inválidas' });
-    const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '12h' });
+    const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'devsecretkeychangeit' : undefined);
+    if (!secret) {
+      console.error('JWT_SECRET não configurado');
+      return res.status(500).json({ error: 'Erro de configuração do servidor (JWT)' });
+    }
+    const token = jwt.sign({ userId: user.id, role: user.role }, secret, { expiresIn: '12h' });
     res.json({ token, user: { id: user.id, name: user.name, login: user.login, role: user.role } });
   } catch (err) {
     console.error(err);
