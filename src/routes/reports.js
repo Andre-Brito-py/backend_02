@@ -54,13 +54,23 @@ router.get('/revenue-by-day', async (req, res) => {
       if (start) where.createdAt.gte = new Date(start);
       if (end) where.createdAt.lte = new Date(end);
     }
-    // Carrega vendas com itens e aplica filtro de delivery/presencial nos itens
-    const sales = await prisma.sale.findMany({ where, orderBy: { createdAt: 'asc' }, include: { items: true } });
+    // Carrega vendas com itens e adicionais e aplica filtro de delivery/presencial nos itens
+    const sales = await prisma.sale.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+      include: { items: { include: { additionals: true } } },
+    });
     const matchDelivery = (i) => delivery === 'delivery' ? i.isDelivery === true : delivery === 'presencial' ? i.isDelivery === false : true;
     const map = new Map();
     for (const s of sales) {
       const d = s.createdAt.toISOString().slice(0,10);
-      const totalItems = s.items.filter(matchDelivery).reduce((acc, it) => acc + Number(it.unitPrice) * it.quantity, 0);
+      const totalItems = s.items
+        .filter(matchDelivery)
+        .reduce((acc, it) => {
+          const base = Number(it.unitPrice) * it.quantity;
+          const adds = (it.additionals || []).reduce((sum, a) => sum + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+          return acc + base + adds;
+        }, 0);
       map.set(d, (map.get(d) || 0) + totalItems);
     }
     const data = Array.from(map.entries()).map(([date, total]) => ({ date, total }));
@@ -83,7 +93,7 @@ router.get('/top-products', async (req, res) => {
 
     const sales = await prisma.sale.findMany({
       where: whereSale,
-      include: { items: { include: { product: true } } },
+      include: { items: { include: { product: true, additionals: true } } },
     });
 
     const map = new Map();
@@ -92,7 +102,9 @@ router.get('/top-products', async (req, res) => {
         const key = i.productId;
         const prev = map.get(key) || { productId: key, name: i.product.name, qty: 0, revenue: 0 };
         prev.qty += i.quantity;
-        prev.revenue += Number(i.unitPrice) * i.quantity;
+        const base = Number(i.unitPrice) * i.quantity;
+        const adds = (i.additionals || []).reduce((s, a) => s + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+        prev.revenue += base + adds;
         map.set(key, prev);
       }
     }
@@ -123,7 +135,11 @@ router.get('/export-xlsx', async (req, res) => {
     let sales = await prisma.sale.findMany({
       where,
       orderBy: { createdAt: 'asc' },
-      include: { items: { include: { product: true } }, paymentMethod: true, user: true },
+      include: {
+        items: { include: { product: true, additionals: { include: { additional: true } } } },
+        paymentMethod: true,
+        user: true,
+      },
     });
 
     // Filtro por produto (aplicado após a consulta pois é relacionamento many-to-many)
@@ -142,7 +158,11 @@ router.get('/export-xlsx', async (req, res) => {
     const mapByDay = new Map();
     for (const s of sales) {
       const d = s.createdAt.toISOString().slice(0,10);
-      const totalItemsDay = s.items.reduce((acc, i) => acc + Number(i.unitPrice) * i.quantity, 0);
+      const totalItemsDay = s.items.reduce((acc, i) => {
+        const base = Number(i.unitPrice) * i.quantity;
+        const adds = (i.additionals || []).reduce((sum, a) => sum + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+        return acc + base + adds;
+      }, 0);
       mapByDay.set(d, (mapByDay.get(d) || 0) + totalItemsDay);
     }
     const revenueByDay = Array.from(mapByDay.entries()).map(([date, total]) => ({ date, total }));
@@ -154,14 +174,20 @@ router.get('/export-xlsx', async (req, res) => {
         const key = i.productId;
         const prev = mapTop.get(key) || { productId: key, name: i.product.name, qty: 0, revenue: 0 };
         prev.qty += i.quantity;
-        prev.revenue += Number(i.unitPrice) * i.quantity;
+        const base = Number(i.unitPrice) * i.quantity;
+        const adds = (i.additionals || []).reduce((s, a) => s + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+        prev.revenue += base + adds;
         mapTop.set(key, prev);
       }
     }
     const topProducts = Array.from(mapTop.values()).sort((a,b) => b.qty - a.qty);
 
     // Resumo período (com base em itens filtrados)
-    const total = sales.reduce((acc, s) => acc + s.items.reduce((a,i)=>a + Number(i.unitPrice) * i.quantity, 0), 0);
+    const total = sales.reduce((acc, s) => acc + s.items.reduce((a,i)=>{
+      const base = Number(i.unitPrice) * i.quantity;
+      const adds = (i.additionals || []).reduce((sum, a) => sum + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+      return a + base + adds;
+    }, 0), 0);
     const count = sales.length;
     const totalItems = sales.reduce((acc, s) => acc + s.items.reduce((a,i)=>a+i.quantity,0), 0);
     const avgTicket = count ? total / count : 0;
@@ -230,13 +256,25 @@ router.get('/export-xlsx', async (req, res) => {
     wsVendas.views = [{ state: 'frozen', ySplit: 1 }];
     wsVendas.autoFilter = { from: 'A1', to: 'G1' };
     for (const s of sales) {
-      const totalItems = s.items.reduce((acc, i) => acc + Number(i.unitPrice) * i.quantity, 0);
+      const totalItems = s.items.reduce((acc, i) => {
+        const base = Number(i.unitPrice) * i.quantity;
+        const adds = (i.additionals || []).reduce((sum, a) => sum + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+        return acc + base + adds;
+      }, 0);
       wsVendas.addRow({
         saleId: s.id,
         dt: new Date(s.createdAt),
         user: s.user?.name || s.userId,
         pay: s.paymentMethod?.name || s.paymentMethodId,
-        items: s.items.map(i => `${i.product.name} x${i.quantity} (R$ ${Number(i.unitPrice).toFixed(2)})`).join('; '),
+        items: s.items.map(i => {
+          const base = Number(i.unitPrice) * i.quantity;
+          const adds = (i.additionals || []).reduce((sum, a) => sum + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+          const subtotal = base + adds;
+          const addsTxt = (i.additionals || []).length
+            ? ` + Adicionais: ${(i.additionals || []).map(a => `${a.additional?.name || ''} x${a.quantity}`).join(', ')}`
+            : '';
+          return `${i.product.name} x${i.quantity} (R$ ${subtotal.toFixed(2)})${addsTxt}`;
+        }).join('; '),
         qtyTotal: s.items.reduce((a,i)=>a+i.quantity,0),
         tot: Number(totalItems),
       });
@@ -259,11 +297,13 @@ router.get('/export-xlsx', async (req, res) => {
     wsItens.getRow(1).font = { bold: true };
     wsItens.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEAF2FF' } };
     wsItens.views = [{ state: 'frozen', ySplit: 1 }];
-    wsItens.autoFilter = { from: 'A1', to: 'I1' };
+    wsItens.autoFilter = { from: 'A1', to: 'J1' };
     for (const s of sales) {
       for (const i of s.items) {
         const unit = Number(i.unitPrice);
-        const sub = unit * i.quantity;
+        const base = unit * i.quantity;
+        const adds = (i.additionals || []).reduce((sum, a) => sum + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+        const sub = base + adds;
         wsItens.addRow({
           saleId: s.id,
           dt: new Date(s.createdAt),
