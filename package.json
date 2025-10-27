@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon src/server.js",
-    "start": "prisma generate && prisma db push && node src/server.js",
+    "start": "prisma generate && prisma db push && prisma db seed && node src/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:push": "prisma db push",
     "prisma:seed": "node prisma/seed.js",
     "reset:db": "node scripts/reset-db.js"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",
