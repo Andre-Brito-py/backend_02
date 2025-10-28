@@ -12,6 +12,7 @@ import reportRoutes from './routes/reports.js';
 import categoryRoutes from './routes/categories.js';
 import additionalCategoryRoutes from './routes/additionalCategories.js';
 import additionalRoutes from './routes/additionals.js';
+import settingsRoutes from './routes/settings.js';
 
 dotenv.config({ override: true });
 
@@ -23,16 +24,18 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '*')
   .split(',')
   .map(o => o.trim())
   .filter(Boolean);
-const devWhitelist = ['http://localhost:3000', 'http://localhost:3001'];
+const devWhitelist = ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002'];
 
 app.use(cors({
   origin: function (origin, callback) {
     // Permite ferramentas locais sem origin
     if (!origin) return callback(null, true);
+    const isDev = process.env.NODE_ENV !== 'production';
+    const isLocalhost = /^http:\/\/localhost:\d+$/.test(origin);
     if (
       allowedOrigins.includes('*') ||
       allowedOrigins.includes(origin) ||
-      (process.env.NODE_ENV !== 'production' && devWhitelist.includes(origin))
+      (isDev && (devWhitelist.includes(origin) || isLocalhost))
     ) {
       return callback(null, true);
     }
@@ -57,6 +60,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/additional-categories', additionalCategoryRoutes);
 app.use('/api/additionals', additionalRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Tratamento de erros genérico
 app.use((err, req, res, next) => {

@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -106,4 +106,13 @@ model SaleItemAdditional {
   additional   Additional @relation(fields: [additionalId], references: [id])
   quantity     Int        @default(1)
   unitPrice    Decimal
+}
+
+// Configurações globais do sistema (single-tenant)
+model Setting {
+  id                Int      @id @default(autoincrement())
+  recentSalesLimit  Int      @default(10)
+  recentSalesEnabled Boolean  @default(true)
+  darkMode          Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
 }

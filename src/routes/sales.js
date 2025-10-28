@@ -192,14 +192,46 @@ router.get('/', authenticate, async (req, res) => {
     });
 
     // Filtrar por produtoId no nível dos itens
-    const filtered = productId
+  const filtered = productId
       ? sales.filter(s => s.items.some(i => i.productId === parseInt(productId)))
       : sales;
 
-    res.json(filtered);
+  res.json(filtered);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erro ao listar vendas' });
+  }
+});
+
+// Lista vendas recentes (defina antes de ":id" para evitar conflito de rota)
+router.get('/recent', authenticate, async (req, res) => {
+  try {
+    const qLimit = parseInt(req.query.limit);
+    let limit = Number.isInteger(qLimit) && qLimit > 0 ? qLimit : undefined;
+    if (!limit) {
+      const setting = await prisma.setting.findFirst();
+      // Se desabilitado, retorna lista vazia
+      if (setting && setting.recentSalesEnabled === false) {
+        return res.json([]);
+      }
+      limit = setting?.recentSalesLimit || 10;
+    }
+    const where = {};
+    if (req.user.role === 'CAIXA') where.userId = req.user.userId;
+    const sales = await prisma.sale.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        user: true,
+        paymentMethod: true,
+        items: { include: { product: true, additionals: true } },
+      },
+    });
+    res.json(sales);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao listar vendas recentes' });
   }
 });
 
@@ -222,6 +254,106 @@ router.get('/:id', authenticate, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erro ao carregar venda' });
+  }
+});
+
+// Lista vendas recentes (limite configurável)
+
+// Editar venda (ADMIN qualquer; CAIXA apenas próprias). Não permite adicionar/remover itens nesta versão.
+router.put('/:id', authenticate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const sale = await prisma.sale.findUnique({
+      where: { id },
+      include: { items: { include: { product: true, additionals: true } }, user: true },
+    });
+    if (!sale) return res.status(404).json({ error: 'Venda não encontrada' });
+    if (req.user.role === 'CAIXA' && sale.userId !== req.user.userId) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
+    const { paymentMethodId, items } = req.body;
+    let nextPaymentMethodId = sale.paymentMethodId;
+    if (paymentMethodId !== undefined) {
+      const pm = parseInt(paymentMethodId);
+      if (!Number.isInteger(pm) || pm <= 0) return res.status(400).json({ error: 'Forma de pagamento inválida' });
+      const existsPm = await prisma.paymentMethod.findUnique({ where: { id: pm } });
+      if (!existsPm) return res.status(400).json({ error: 'Forma de pagamento inexistente' });
+      nextPaymentMethodId = pm;
+    }
+
+    const itemUpdates = new Map();
+    if (Array.isArray(items)) {
+      for (const it of items) {
+        const pid = parseInt(it.productId);
+        const qty = parseInt(it.quantity);
+        const unitPrice = it.unitPrice !== undefined ? Number(it.unitPrice) : undefined;
+        const isDelivery = it.isDelivery === true ? true : it.isDelivery === false ? false : undefined;
+        if (!Number.isInteger(pid) || !Number.isInteger(qty) || qty <= 0) {
+          return res.status(400).json({ error: 'Item inválido para atualização' });
+        }
+        itemUpdates.set(pid, { qty, unitPrice, isDelivery });
+      }
+    }
+
+    // Transação: recalcular total, ajustar estoque e atualizar venda/itens
+    const updatedSale = await prisma.$transaction(async (tx) => {
+      // Ajuste de estoque por delta de quantidade
+      for (const si of sale.items) {
+        const upd = itemUpdates.get(si.productId);
+        if (upd) {
+          const delta = upd.qty - si.quantity;
+          const tracked = si.product.stock;
+          if (tracked >= 0 && delta !== 0) {
+            await tx.product.update({
+              where: { id: si.productId },
+              data: { stock: tracked - delta },
+            });
+          }
+        }
+      }
+
+      // Atualizar itens (quantidade, preço unitário se variável, isDelivery)
+      for (const si of sale.items) {
+        const upd = itemUpdates.get(si.productId);
+        if (upd) {
+          const data = { quantity: upd.qty };
+          if (upd.isDelivery !== undefined) data.isDelivery = upd.isDelivery;
+          // Preço variável pode ser alterado
+          if (si.product.variablePrice && upd.unitPrice !== undefined) {
+            const up = Number(upd.unitPrice);
+            if (!Number.isFinite(up) || up <= 0) throw new Error('Preço unitário inválido para item');
+            data.unitPrice = up.toFixed(2);
+          }
+          await tx.saleItem.update({ where: { id: si.id }, data });
+        }
+      }
+
+      // Recarregar itens atualizados para cálculo do total
+      const fresh = await tx.sale.findUnique({
+        where: { id: sale.id },
+        include: { items: { include: { product: true, additionals: true } } },
+      });
+
+      let total = 0;
+      for (const it of fresh.items) {
+        const base = Number(it.unitPrice) * it.quantity;
+        const adds = (it.additionals || []).reduce((s, a) => s + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+        total += base + adds;
+      }
+
+      const sUpd = await tx.sale.update({
+        where: { id: sale.id },
+        data: { paymentMethodId: nextPaymentMethodId, total: total.toFixed(2) },
+      });
+      return sUpd;
+    });
+
+    res.json(updatedSale);
+  } catch (err) {
+    console.error(err);
+    const msg = err?.message?.includes('inválido') ? err.message : 'Erro ao editar venda';
+    res.status(500).json({ error: msg });
   }
 });
 
