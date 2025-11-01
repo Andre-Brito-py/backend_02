@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../utils/prisma.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -354,6 +354,49 @@ router.put('/:id', authenticate, async (req, res) => {
     console.error(err);
     const msg = err?.message?.includes('inválido') ? err.message : 'Erro ao editar venda';
     res.status(500).json({ error: msg });
+  }
+});
+
+// Excluir venda (somente ADMIN)
+router.delete('/:id', authenticate, requireRole('ADMIN'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID inválido' });
+
+    // Carregar venda com itens e produtos
+    const sale = await prisma.sale.findUnique({
+      where: { id },
+      include: { items: { include: { product: true, additionals: true } } },
+    });
+    if (!sale) return res.status(404).json({ error: 'Venda não encontrada' });
+
+    await prisma.$transaction(async (tx) => {
+      // Repor estoque dos produtos rastreados
+      for (const it of sale.items) {
+        const tracked = it.product.stock;
+        if (tracked >= 0) {
+          await tx.product.update({
+            where: { id: it.productId },
+            data: { stock: tracked + it.quantity },
+          });
+        }
+      }
+
+      // Remover relacionamentos de adicionais dos itens
+      const itemIds = sale.items.map(i => i.id);
+      if (itemIds.length > 0) {
+        await tx.saleItemAdditional.deleteMany({ where: { saleItemId: { in: itemIds } } });
+        await tx.saleItem.deleteMany({ where: { id: { in: itemIds } } });
+      }
+
+      // Remover a venda
+      await tx.sale.delete({ where: { id: sale.id } });
+    });
+
+    res.status(204).send();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao excluir venda' });
   }
 });
 

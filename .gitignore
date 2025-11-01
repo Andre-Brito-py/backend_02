@@ -1,10 +1,11 @@
-﻿node_modules/
+node_modules/
 .env
 .env.local
 .env.*.local
 
 # Prisma
 prisma/dev.db
+prisma/**/*.db
 
 # Logs
 npm-debug.log*

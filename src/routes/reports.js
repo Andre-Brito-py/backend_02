@@ -13,6 +13,7 @@ function endOfDay(d) { const x = new Date(d); x.setHours(23,59,59,999); return x
 router.get('/summary', async (req, res) => {
   try {
     const now = new Date();
+    const { delivery } = req.query;
 
     const startToday = startOfDay(now);
     const endToday = endOfDay(now);
@@ -24,20 +25,31 @@ router.get('/summary', async (req, res) => {
     const endWeek = endOfDay(new Date());
 
     const startMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const endMonth = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    // Limita o mês até hoje para evitar discrepâncias e expectativas diferentes
+    const endMonth = endToday;
+
+    const includeItems = { include: { items: { include: { additionals: true } } } };
 
     const [today, week, month] = await Promise.all([
-      prisma.sale.findMany({ where: { createdAt: { gte: startToday, lte: endToday } } }),
-      prisma.sale.findMany({ where: { createdAt: { gte: startWeek, lte: endWeek } } }),
-      prisma.sale.findMany({ where: { createdAt: { gte: startMonth, lte: endMonth } } }),
+      prisma.sale.findMany({ where: { createdAt: { gte: startToday, lte: endToday } }, ...includeItems }),
+      prisma.sale.findMany({ where: { createdAt: { gte: startWeek, lte: endWeek } }, ...includeItems }),
+      prisma.sale.findMany({ where: { createdAt: { gte: startMonth, lte: endMonth } }, ...includeItems }),
     ]);
 
-    const sum = (arr) => arr.reduce((acc, s) => acc + Number(s.total), 0);
+    const matchDelivery = (i) => delivery === 'delivery' ? i.isDelivery === true : delivery === 'presencial' ? i.isDelivery === false : true;
+    const sumItems = (sales) => sales.reduce((acc, s) => acc + s.items
+      .filter(matchDelivery)
+      .reduce((sub, it) => {
+        const base = Number(it.unitPrice) * it.quantity;
+        const adds = (it.additionals || []).reduce((sum, a) => sum + Number(a.unitPrice) * Number(a.quantity || 1), 0);
+        return sub + base + adds;
+      }, 0), 0);
+    const countFilteredSales = (sales) => sales.filter(s => s.items.some(matchDelivery)).length;
 
     res.json({
-      today: { total: sum(today), count: today.length },
-      week: { total: sum(week), count: week.length },
-      month: { total: sum(month), count: month.length },
+      today: { total: sumItems(today), count: countFilteredSales(today) },
+      week: { total: sumItems(week), count: countFilteredSales(week) },
+      month: { total: sumItems(month), count: countFilteredSales(month) },
     });
   } catch (err) {
     console.error(err);
